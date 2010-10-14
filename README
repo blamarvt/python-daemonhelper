@@ -1,1 +1,4 @@
-TODO
+Python Daemonhelper
+===================
+
+Tool for creating sysvinit-style daemons in Python.  See example.py
