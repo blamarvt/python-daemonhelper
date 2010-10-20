@@ -118,12 +118,12 @@ class Daemon(object):
 		# Fork child process (unless we run in foreground)
 		try:
 			if self.should_daemonize:
-				first_fork_retval = os.fork()
+				first_fork_retval = self._fork()
 				if first_fork_retval > 0:
 					return
 				os.setsid()
 				self._setup_std_pipes()
-				second_fork_retval = os.fork()
+				second_fork_retval = self._fork()
 				if second_fork_retval > 0:
 					sys.exit(0)
 		except SystemExit:
@@ -141,7 +141,7 @@ class Daemon(object):
 				self._drop_privileges()
 				self._write_pidfile()
 				self._setup_signal_handlers()
-				self.handle_run()
+				self._do_run()
 				self.logger.info("Stopped")
 			finally:
 				try:
@@ -176,6 +176,9 @@ class Daemon(object):
 		if not os.path.exists(self.pidfile_dir):
 			os.mkdir(self.pidfile_dir, 0770)
 		os.lchown(self.pidfile_dir, self._use_uid, self._use_gid)
+
+	def _fork(self):
+		return os.fork()
 
 	def _write_pidfile(self):
 		f = open(self.pidfile_path, "w")
@@ -231,6 +234,9 @@ class Daemon(object):
 		logger.addHandler(stream_handler)
 		
 		self.logger = logging.getLogger(self.name)
+
+	def _do_run(self):
+		self.handle_run()
 
 	# PROCESS CONTROL
 
@@ -404,3 +410,30 @@ def make_main(daemon_type, stop_wait_time=8):
 				print >>sys.stderr, "%s: %s" % (e.__class__.__name__, e)
 			raise SystemExit(3)
 	return main
+
+
+try:
+	import gevent
+
+	class GeventDaemon(Daemon):
+		def _fork(self):
+			return gevent.fork()
+
+		def _setup_signal_handlers(self):
+			gevent.signal(signal.SIGTERM, lambda *_: self.handle_stop())
+			gevent.signal(signal.SIGHUP, lambda *_: self.handle_update())
+			gevent.signal(signal.SIGUSR1, lambda *_: self.handle_usr1())
+			gevent.signal(signal.SIGUSR2, lambda *_: self.handle_usr2())
+		
+		def _do_run(self):
+			main = gevent.spawn(self.handle_run)
+			while True:
+				try:
+					main.join()
+					break
+				except KeyboardInterrupt:
+					self.handle_stop()
+except ImportError:
+	pass
+
+	
