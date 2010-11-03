@@ -12,14 +12,22 @@ import time
 import errno
 import signal
 import logging
+import asyncore
 import optparse
 import traceback
+import logging.handlers
 
 try:
     import gevent
     _USE_GEVENT = True
 except ImportError:
     _USE_GEVENT = False
+
+try:
+    import pyinotify
+    _USE_PYINOTIFY = True
+except ImportError:
+    _USE_PYINOTIFY = False
 
 from daemonhelper.config import ConfigFile
 from daemonhelper.exceptions import DaemonStopped, DaemonRunning
@@ -48,6 +56,7 @@ class Daemon(object):
     name = "unknown_daemon"
     description = ""
 
+    autoreload = False
     should_daemonize = True
     signal_alias = {}
 
@@ -158,6 +167,8 @@ class Daemon(object):
                 self._drop_privileges()
                 self._write_pidfile()
                 self._setup_signal_handlers()
+                if self.autoreload:
+                    self._setup_conf_watcher()
                 self._do_run()
                 self.logger.info("Stopped")
             finally:
@@ -224,6 +235,15 @@ class Daemon(object):
         signal.signal(signal.SIGHUP, lambda *_: self.handle_update())
         signal.signal(signal.SIGUSR1, lambda *_: self.handle_usr1())
         signal.signal(signal.SIGUSR2, lambda *_: self.handle_usr2())
+
+    def _setup_conf_watcher(self):
+        """Use pyinotify to reload the config when it gets changed."""
+        if _USE_PYINOTIFY and os.path.exists(self.config_path):
+            self.logger.info("Starting pyinotify watcher on %s" % self.config_path)
+            wm = pyinotify.WatchManager()
+            notifier = pyinotify.AsyncNotifier(wm, lambda *_: self.handle_update())
+            wm.add_watch(self.config_path, pyinotify.IN_MODIFY)
+            asyncore.loop()
 
     def _load_privileges(self):
         """Set user/group from the config, or root/root if none are specified"""
